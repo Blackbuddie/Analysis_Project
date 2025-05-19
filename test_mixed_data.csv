@@ -1,0 +1,11 @@
+id,product_name,price,category,stock_quantity,last_restock_date,is_active,rating,weight_kg,dimensions,color,manufacturer,country_of_origin
+1,Laptop Pro X1,1299.99,Electronics,50,2024-03-01,true,4.5,1.8,"15x10x1","Silver","TechCorp","USA"
+2,Organic Apples,2.99,Produce,200,2024-03-15,true,4.8,0.5,"6x6x6","Red","FreshFarms","Canada"
+3,Smart Watch Y2,299.99,Electronics,75,2024-02-28,true,4.2,0.1,"4x4x1","Black","TechCorp","China"
+4,Desk Chair,199.99,Furniture,30,2024-03-10,false,4.0,8.5,"60x60x100","Black","OfficePlus","Mexico"
+5,Bluetooth Speaker,89.99,Electronics,100,2024-03-05,true,4.6,0.8,"10x10x10","Blue","SoundTech","Japan"
+6,Notebook Set,15.99,Stationery,500,2024-03-12,true,4.3,0.3,"20x15x2","White","PaperCo","Germany"
+7,Coffee Maker,79.99,Appliances,40,2024-03-08,true,4.4,2.5,"25x15x30","Stainless","HomeTech","Italy"
+8,Yoga Mat,29.99,Sports,150,2024-03-14,true,4.7,0.6,"180x60x0.5","Purple","FitLife","India"
+9,LED TV 55",899.99,Electronics,25,2024-03-02,true,4.9,15.0,"122x70x5","Black","TechCorp","South Korea"
+10,Water Bottle,19.99,Kitchen,300,2024-03-13,true,4.1,0.4,"8x8x25","Blue","EcoLife","USA" 

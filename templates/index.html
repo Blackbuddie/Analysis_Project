@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Analysis</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+        .error {
+            display: none;
+            color: red;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid red;
+            border-radius: 4px;
+        }
+        .results-container {
+            margin-top: 20px;
+        }
+        .feature-card {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .histogram {
+            width: 100%;
+            height: 200px;
+            margin-top: 10px;
+        }
+        #uploadForm {
+            margin-bottom: 20px;
+        }
+        .analysis-section {
+            display: none;
+            margin-top: 20px;
+        }
+        .feature-selection {
+            margin: 20px 0;
+        }
+        .results-table {
+            width: 100%;
+            margin: 10px 0;
+            border-collapse: collapse;
+        }
+        .results-table th,
+        .results-table td {
+            padding: 8px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        .results-table th {
+            background-color: #f5f5f5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container mt-4">
+        <h1>Data Analysis</h1>
+        
+        <!-- Upload Form -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h2>Upload Data</h2>
+            </div>
+            <div class="card-body">
+                <form id="uploadForm" enctype="multipart/form-data">
+                    <div class="mb-3">
+                        <label for="file" class="form-label">Choose Data File (CSV, JSON, or Excel)</label>
+                        <input type="file" class="form-control" id="file" name="file" accept=".csv,.json,.xlsx" required>
+                        <small class="form-text text-muted">Supported formats: CSV, JSON, Excel (.xlsx)</small>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Upload and Analyze</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Loading and Error Messages -->
+        <div id="error" class="error"></div>
+        <div id="loading" class="loading">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Processing data...</p>
+        </div>
+
+        <!-- Additional Analysis Section -->
+        <div id="analysisSection" class="analysis-section">
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h2>Additional Analysis</h2>
+                </div>
+                <div class="card-body">
+                    <div class="mb-3">
+                        <label for="analysisType" class="form-label">Analysis Type</label>
+                        <select class="form-select" id="analysisType">
+                            <option value="regression">Regression</option>
+                            <option value="classification">Classification</option>
+                            <option value="clustering">Clustering</option>
+                        </select>
+                    </div>
+
+                    <div class="feature-selection">
+                        <div class="mb-3">
+                            <label for="features" class="form-label">Select Features</label>
+                            <select class="form-select" id="features" multiple size="5">
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            <small class="form-text text-muted">Hold Ctrl (Windows) or Command (Mac) to select multiple features</small>
+                        </div>
+
+                        <div id="targetFeatureContainer" class="mb-3">
+                            <label for="targetFeature" class="form-label">Select Target Feature</label>
+                            <select class="form-select" id="targetFeature" size="5">
+                                <!-- Options will be populated dynamically -->
+                            </select>
+                            <small class="form-text text-muted">Select the feature you want to predict</small>
+                        </div>
+
+                        <div id="clusteringOptions" class="mb-3" style="display: none;">
+                            <label for="nClusters" class="form-label">Number of Clusters</label>
+                            <input type="number" class="form-control" id="nClusters" min="2" max="10" value="3">
+                        </div>
+
+                        <button id="performAnalysis" class="btn btn-primary">Perform Analysis</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Section -->
+        <div id="results" class="results-container"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script>
+        let currentFileId = null;
+        let currentColumns = [];
+
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+            const analysisSection = document.getElementById('analysisSection');
+            
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            results.innerHTML = '';
+            analysisSection.style.display = 'none';
+            
+            const formData = new FormData(this);
+            
+            try {
+                // Upload file
+                const uploadResponse = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!uploadResponse.ok) {
+                    throw new Error('Failed to upload file');
+                }
+
+                const uploadData = await uploadResponse.json();
+                console.log('Upload response:', uploadData); // Debug log
+
+                if (!uploadData.columns || !Array.isArray(uploadData.columns)) {
+                    throw new Error('No columns received from server');
+                }
+
+                currentFileId = uploadData.file_id;
+                currentColumns = uploadData.columns;
+
+                // Perform initial exploratory analysis
+                const analysisResponse = await fetch(`/analyze/${currentFileId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        analysis_type: 'exploratory',
+                        selected_features: currentColumns,
+                        target_feature: ''
+                    })
+                });
+
+                if (!analysisResponse.ok) {
+                    throw new Error('Failed to analyze data');
+                }
+
+                const analysisData = await analysisResponse.json();
+                displayResults(analysisData);
+
+                // Show additional analysis section and populate feature selectors
+                analysisSection.style.display = 'block';
+                populateFeatureSelectors(currentColumns);
+
+            } catch (err) {
+                console.error('Error:', err); // Debug log
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        // Handle analysis type change
+        document.getElementById('analysisType').addEventListener('change', function(e) {
+            const targetContainer = document.getElementById('targetFeatureContainer');
+            const clusteringOptions = document.getElementById('clusteringOptions');
+            const featuresSelect = document.getElementById('features');
+            
+            if (e.target.value === 'clustering') {
+                targetContainer.style.display = 'none';
+                clusteringOptions.style.display = 'block';
+            } else {
+                targetContainer.style.display = 'block';
+                clusteringOptions.style.display = 'none';
+            }
+            
+            // Always allow multiple selection for features
+            featuresSelect.multiple = true;
+        });
+
+        // Populate feature selectors
+        function populateFeatureSelectors(columns) {
+            console.log('Populating features with:', columns); // Debug log
+            
+            if (!columns || !Array.isArray(columns)) {
+                console.error('Invalid columns data:', columns);
+                return;
+            }
+
+            const featuresSelect = document.getElementById('features');
+            const targetFeatureSelect = document.getElementById('targetFeature');
+            
+            if (!featuresSelect || !targetFeatureSelect) {
+                console.error('Feature select elements not found');
+                return;
+            }
+            
+            // Clear existing options
+            featuresSelect.innerHTML = '';
+            targetFeatureSelect.innerHTML = '';
+            
+            // Add options to both selects
+            columns.forEach(column => {
+                if (typeof column === 'string') {
+                    const featureOption = new Option(column, column);
+                    const targetOption = new Option(column, column);
+                    featuresSelect.add(featureOption);
+                    targetFeatureSelect.add(targetOption);
+                }
+            });
+
+            // Set initial state for multiple selection
+            featuresSelect.multiple = true;
+            
+            console.log('Features populated successfully'); // Debug log
+        }
+
+        // Handle additional analysis
+        document.getElementById('performAnalysis').addEventListener('click', async function() {
+            const analysisType = document.getElementById('analysisType').value;
+            const features = Array.from(document.getElementById('features').selectedOptions).map(opt => opt.value);
+            const targetFeature = document.getElementById('targetFeature').value;
+            const nClusters = document.getElementById('nClusters').value;
+
+            if (features.length === 0) {
+                alert('Please select at least one feature');
+                return;
+            }
+
+            if (analysisType !== 'clustering' && !targetFeature) {
+                alert('Please select a target feature');
+                return;
+            }
+
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+
+            loading.style.display = 'block';
+            error.style.display = 'none';
+
+            try {
+                const response = await fetch(`/tasks/${currentFileId}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        task_type: analysisType,
+                        features: features,
+                        target: targetFeature,
+                        n_clusters: parseInt(nClusters)
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Analysis failed');
+                }
+
+                const analysisData = await response.json();
+                displayAnalysisResults(analysisData, analysisType);
+            } catch (err) {
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        });
+
+        function showTrainingMessage(fileId) {
+            const results = document.getElementById('results');
+            results.innerHTML = `<div class="alert alert-info" id="training-message">Model is still being trained. Please wait and try again.<br>
+                <div class="progress mt-2">
+                    <div id="training-progress-bar" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+                </div>
+            </div>`;
+            pollTrainingProgress(fileId);
+        }
+
+        function pollTrainingProgress(fileId) {
+            fetch(`/model_status/${fileId}`)
+                .then(res => res.json())
+                .then(data => {
+                    const bar = document.getElementById('training-progress-bar');
+                    if (bar) {
+                        bar.style.width = data.progress + '%';
+                        bar.textContent = data.progress + '%';
+                    }
+                    if (data.progress < 100) {
+                        setTimeout(() => pollTrainingProgress(fileId), 2000);
+                    } else {
+                        // Automatically retry analysis when done
+                        fetchAnalysisResults();
+                    }
+                });
+        }
+
+        function displayResults(data) {
+            const results = document.getElementById('results');
+            // Handle backend message (e.g., model is being trained)
+            if (data.message) {
+                showTrainingMessage(currentFileId);
+                return;
+            }
+            // Display dataset info
+            let html = `
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h2>Dataset Information</h2>
+                    </div>
+                    <div class="card-body">
+                        <p><strong>Total Rows:</strong> ${data.dataset_info.total_rows}</p>
+                        <p><strong>Total Columns:</strong> ${data.dataset_info.total_columns}</p>
+                        <h3>Missing Values Percentage</h3>
+                        <ul>
+            `;
+            
+            for (const [column, percentage] of Object.entries(data.dataset_info.missing_values_percentage)) {
+                html += `<li>${column}: ${percentage.toFixed(2)}%</li>`;
+            }
+            
+            html += `
+                        </ul>
+                    </div>
+                </div>
+            `;
+
+            // Display feature analysis
+            for (const [feature, analysis] of Object.entries(data)) {
+                if (feature === 'dataset_info') continue;
+                
+                html += `
+                    <div class="card mb-4">
+                        <div class="card-header">
+                            <h2>${feature}</h2>
+                            <span class="badge bg-${analysis.type === 'numeric' ? 'primary' : 'success'}">
+                                ${analysis.type}
+                            </span>
+                        </div>
+                        <div class="card-body">
+                `;
+
+                if (analysis.type === 'numeric') {
+                    html += `
+                        <h3>Statistics</h3>
+                        <ul>
+                            <li>Min: ${analysis.stats.min.toFixed(2)}</li>
+                            <li>Max: ${analysis.stats.max.toFixed(2)}</li>
+                            <li>Mean: ${analysis.stats.mean.toFixed(2)}</li>
+                            <li>Std: ${analysis.stats.std.toFixed(2)}</li>
+                            <li>25% Quartile: ${analysis.stats.quartiles['25%'].toFixed(2)}</li>
+                            <li>50% Quartile: ${analysis.stats.quartiles['50%'].toFixed(2)}</li>
+                            <li>75% Quartile: ${analysis.stats.quartiles['75%'].toFixed(2)}</li>
+                        </ul>
+                    `;
+
+                    // Create histogram
+                    if (analysis.histogram && analysis.histogram.counts.length > 0) {
+                        const histogramDiv = document.createElement('div');
+                        histogramDiv.id = `histogram-${feature}`;
+                        histogramDiv.className = 'histogram';
+                        results.appendChild(histogramDiv);
+
+                        const trace = {
+                            x: analysis.histogram.bin_edges.slice(0, -1),
+                            y: analysis.histogram.counts,
+                            type: 'bar',
+                            name: feature
+                        };
+
+                        const layout = {
+                            title: `${feature} Distribution`,
+                            xaxis: { title: feature },
+                            yaxis: { title: 'Count' }
+                        };
+
+                        Plotly.newPlot(histogramDiv.id, [trace], layout);
+                    }
+
+                    // Display correlations if available
+                    if (analysis.correlations) {
+                        html += `
+                            <h3>Correlations</h3>
+                            <ul>
+                        `;
+                        for (const [correlatedFeature, correlation] of Object.entries(analysis.correlations)) {
+                            html += `<li>${correlatedFeature}: ${correlation.toFixed(2)}</li>`;
+                        }
+                        html += `</ul>`;
+                    }
+                } else {
+                    // Categorical analysis
+                    html += `
+                        <h3>Top Values</h3>
+                        <ul>
+                    `;
+                    for (const [value, count] of Object.entries(analysis.top_values)) {
+                        html += `<li>${value}: ${count}</li>`;
+                    }
+                    html += `
+                        </ul>
+                        <p><strong>Most Common Value:</strong> ${analysis.most_common_value}</p>
+                        <p><strong>Least Common Value:</strong> ${analysis.least_common_value}</p>
+                    `;
+                }
+
+                html += `
+                        </div>
+                    </div>
+                `;
+            }
+
+            results.innerHTML = html;
+        }
+
+        function displayAnalysisResults(data, analysisType) {
+            const results = document.getElementById('results');
+            let html = `
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h2>${analysisType.charAt(0).toUpperCase() + analysisType.slice(1)} Results</h2>
+                    </div>
+                    <div class="card-body">
+            `;
+
+            if (analysisType === 'regression') {
+                html += `
+                    <h3>Model Performance</h3>
+                    <p><strong>RMSE:</strong> ${data.model_performance.rmse.toFixed(4)}</p>
+                `;
+                if (data.feature_importance_plot) {
+                    const plotDiv = document.createElement('div');
+                    plotDiv.id = 'feature-importance-plot';
+                    plotDiv.style.height = '400px';
+                    results.appendChild(plotDiv);
+                    Plotly.newPlot('feature-importance-plot', data.feature_importance_plot.data, data.feature_importance_plot.layout);
+                }
+            } else if (analysisType === 'classification') {
+                html += `
+                    <h3>Model Performance</h3>
+                    <p><strong>Accuracy:</strong> ${(data.model_performance.accuracy * 100).toFixed(2)}%</p>
+                `;
+                if (data.feature_importance_plot) {
+                    const plotDiv = document.createElement('div');
+                    plotDiv.id = 'feature-importance-plot';
+                    plotDiv.style.height = '400px';
+                    results.appendChild(plotDiv);
+                    Plotly.newPlot('feature-importance-plot', data.feature_importance_plot.data, data.feature_importance_plot.layout);
+                }
+            } else if (analysisType === 'clustering') {
+                html += `
+                    <h3>Cluster Information</h3>
+                    <table class="results-table">
+                        <thead>
+                            <tr>
+                                <th>Cluster</th>
+                                <th>Size</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                for (const [cluster, size] of Object.entries(data.cluster_sizes)) {
+                    html += `
+                        <tr>
+                            <td>${cluster}</td>
+                            <td>${size}</td>
+                        </tr>
+                    `;
+                }
+                html += `
+                        </tbody>
+                    </table>
+                `;
+                if (data.clustering_plot) {
+                    const plotDiv = document.createElement('div');
+                    plotDiv.id = 'clustering-plot';
+                    plotDiv.style.height = '400px';
+                    results.appendChild(plotDiv);
+                    Plotly.newPlot('clustering-plot', [data.clustering_plot]);
+                }
+            }
+
+            html += `
+                    </div>
+                </div>
+            `;
+
+            results.innerHTML += html;
+        }
+    </script>
+</body>
+</html> 
