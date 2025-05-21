@@ -1,6 +1,7 @@
 import os
-os.environ["HADOOP_HOME"] = "C:/hadoop-3.3.6"
 
+# Set Hadoop home and update PATH for winutils.exe
+os.environ["HADOOP_HOME"] = r"C:\hadoop-3.3.6"
 from flask import Flask, request, jsonify, render_template, send_from_directory
 from flask_cors import CORS
 from config import Config
@@ -37,9 +38,19 @@ log_handler = logging.StreamHandler(log_capture)
 log_handler.setLevel(logging.INFO)
 logger.addHandler(log_handler)
 
+# --- Add file logging for production ---
+file_handler = logging.FileHandler('app.log')
+file_handler.setLevel(logging.INFO)
+file_formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(threadName)s : %(message)s')
+file_handler.setFormatter(file_formatter)
+logger.addHandler(file_handler)
+
 class JSONEncoder(json.JSONEncoder):
     def default(self, obj):
         try:
+            from datetime import datetime
+            if isinstance(obj, datetime):
+                return obj.isoformat()  # Convert datetime to ISO format string
             if hasattr(obj, 'toPandas'):
                 return json.loads(obj.toPandas().to_json(orient='records'))
             if isinstance(obj, pd.DataFrame):
@@ -60,24 +71,19 @@ class JSONEncoder(json.JSONEncoder):
             return str(obj)
 
 app = Flask(__name__)
-# Configure CORS to allow all origins for development
-CORS(app, resources={
-    r"/*": {
-        "origins": "*",
-        "methods": ["GET", "POST", "OPTIONS"],
-        "allow_headers": ["Content-Type"]
-    }
-})
+from config.cors_config import CORSConfig
+
+# Configure CORS with secure settings
+cors_config = CORSConfig()
+CORS(app, resources=cors_config.resources)
 app.config.from_object(Config)
 
 # Define allowed file extensions
-app.config['ALLOWED_EXTENSIONS'] = {'csv', 'json', 'xlsx'}
+app.config['ALLOWED_EXTENSIONS'] = Config.ALLOWED_EXTENSIONS
 app.json_encoder = JSONEncoder
 
-# Explicitly set maximum content length
+# Set maximum content length from config
 app.config['MAX_CONTENT_LENGTH'] = Config.MAX_CONTENT_LENGTH
-# Enable chunked encoding
-app.config['MAX_CONTENT_LENGTH'] = None
 
 # Initialize folders
 try:
@@ -112,7 +118,11 @@ visualizer = Visualizer(os.path.join(app.root_path, 'static'))
 def index():
     return render_template('index.html')
 
+from middleware.security import SecurityMiddleware
+
 @app.route('/upload', methods=['POST'])
+@SecurityMiddleware.validate_content_length
+@SecurityMiddleware.validate_file_extension
 def upload_file():
     try:
         logger.info("Starting file upload process")
@@ -166,76 +176,8 @@ def upload_file():
         file_id = mongo.insert_file_metadata(metadata)
         logger.info(f"Metadata stored with ID: {file_id}")
 
-        # --- AUTO-TRAIN MODELS ON UPLOAD ---
-        try:
-            logger.info("Auto-training models on upload...")
-            df = analyzer.df
-            all_columns = df.columns
-            if len(all_columns) < 2:
-                logger.warning("Not enough columns to train models.")
-            else:
-                # Use last column as default target for regression/classification
-                default_target = all_columns[-1]
-                feature_cols = [col for col in all_columns if col != default_target]
-                from pyspark.ml import Pipeline
-                from pyspark.ml.feature import VectorAssembler, StringIndexer
-                from pyspark.ml.regression import LinearRegression
-                from pyspark.ml.classification import LogisticRegression
-                from pyspark.ml.clustering import KMeans
-                import os
-
-                # Prepare folders
-                MODELS_FOLDER = os.path.join(app.root_path, 'auto_models')
-                if not os.path.exists(MODELS_FOLDER):
-                    os.makedirs(MODELS_FOLDER)
-
-                # --- REGRESSION PIPELINE ---
-                reg_assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-                reg_lr = LinearRegression(featuresCol="features", labelCol="label")
-                reg_pipeline = Pipeline(stages=[reg_assembler, reg_lr])
-                reg_df = df.withColumnRenamed(default_target, "label")
-                reg_model = reg_pipeline.fit(reg_df)
-                reg_model_path = os.path.join(MODELS_FOLDER, f"regression_{file_id}")
-                reg_model.save(reg_model_path)
-                metadata['regression_model_path'] = reg_model_path
-
-                # --- CLASSIFICATION PIPELINE (if target is categorical with <20 unique values) ---
-                n_unique = df.select(default_target).distinct().count()
-                if n_unique > 1 and n_unique <= 20 and str(df.schema[default_target].dataType) == 'StringType':
-                    class_indexer = StringIndexer(inputCol=default_target, outputCol="label")
-                    class_assembler = VectorAssembler(inputCols=feature_cols, outputCol="features")
-                    class_lr = LogisticRegression(featuresCol="features", labelCol="label")
-                    class_pipeline = Pipeline(stages=[class_indexer, class_assembler, class_lr])
-                    class_model = class_pipeline.fit(df)
-                    class_model_path = os.path.join(MODELS_FOLDER, f"classification_{file_id}")
-                    class_model.save(class_model_path)
-                    metadata['classification_model_path'] = class_model_path
-                else:
-                    logger.info("Classification model not trained: target not categorical or too many unique values.")
-
-                # --- CLUSTERING PIPELINE ---
-                cluster_assembler = VectorAssembler(inputCols=all_columns, outputCol="features")
-                kmeans = KMeans(featuresCol="features", k=3, seed=42)
-                cluster_pipeline = Pipeline(stages=[cluster_assembler, kmeans])
-                cluster_model = cluster_pipeline.fit(df)
-                cluster_model_path = os.path.join(MODELS_FOLDER, f"clustering_{file_id}")
-                cluster_model.save(cluster_model_path)
-                metadata['clustering_model_path'] = cluster_model_path
-
-                # Update metadata with model paths
-                metadata['model_training_progress'] = 0
-                metadata['model_training_message'] = 'Model is being trained. Please wait...'
-                mongo.update_file_metadata(file_id, metadata)
-
-                # At the end of training (after model.save()):
-                metadata['model_training_progress'] = 100
-                metadata['model_training_message'] = 'Model training complete.'
-                mongo.update_file_metadata(file_id, metadata)
-
-                logger.info("Auto-trained models saved and metadata updated.")
-        except Exception as e:
-            logger.error(f"Error auto-training models on upload: {str(e)}")
-            logger.error(traceback.format_exc())
+        # --- ASYNC AUTO-TRAIN MODELS ON UPLOAD ---
+        # (Removed: No auto-training after upload)
 
         response_data = {
             'message': 'File processed successfully',
@@ -253,6 +195,7 @@ def upload_file():
         return jsonify({'error': f'Error processing file: {str(e)}'}), 500
 
 @app.route('/analyze/<file_id>', methods=['POST'])
+@SecurityMiddleware.validate_content_length
 def analyze_data(file_id):
     try:
         logger.info(f"Starting analysis for file_id: {file_id}")
@@ -279,6 +222,51 @@ def analyze_data(file_id):
         analyzer = DataAnalyzer(spark_manager)
         analyzer.set_dataframe(df)
         
+        # --- IMMEDIATELY HANDLE EXPLORATORY ANALYSIS ---
+        if analysis_type == 'exploratory':
+            results = analyzer.analyze(
+                analysis_type=analysis_type,
+                selected_features=selected_features,
+                target_feature=target_feature
+            )
+            logger.info("Exploratory analysis completed")
+            # Store results under 'tasks' for frontend compatibility
+            mongo.update_file_metadata(file_id, {
+                'status': 'analyzed',
+                'tasks': {
+                    'exploratory': {
+                        'timestamp': datetime.datetime.utcnow(),
+                        'parameters': {
+                            'selected_features': selected_features,
+                            'target_feature': target_feature
+                        },
+                        'results': results
+                    }
+                }
+            })
+            return jsonify({'results': results}), 200
+        # --- END EXPLORATORY BLOCK ---
+
+        # Validate target for regression/classification
+        if analysis_type in ['regression', 'classification']:
+            if not target_feature or target_feature not in df.columns:
+                return jsonify({'error': 'You must select a valid target column for this analysis type.'}), 400
+        # For exploratory analysis, skip model training
+        if analysis_type == 'exploratory':
+            results = analyzer.analyze(
+                analysis_type=analysis_type,
+                selected_features=selected_features,
+                target_feature=target_feature
+            )
+            logger.info("Exploratory analysis completed")
+            mongo.update_file_metadata(file_id, {
+                'status': 'analyzed',
+                'analysis_type': analysis_type,
+                'results': results
+            })
+            logger.info("Analysis process completed successfully")
+            return jsonify(results)
+
         # Perform analysis
         logger.info("Starting analysis")
         # Check if the selected features/target match any existing model
@@ -288,6 +276,9 @@ def analyze_data(file_id):
             metadata['trained_models'] = {}
         trained_models = metadata['trained_models']
         model_path = trained_models.get(model_key)
+
+        model = None
+        just_trained = False
         if not model_path:
             # Train a new model with the selected features/target
             logger.info("No pre-trained model for selected features/target. Training new model...")
@@ -296,9 +287,11 @@ def analyze_data(file_id):
             from pyspark.ml.regression import LinearRegression
             from pyspark.ml.classification import LogisticRegression
             import os
+
             MODELS_FOLDER = os.path.join(app.root_path, 'auto_models')
             if not os.path.exists(MODELS_FOLDER):
                 os.makedirs(MODELS_FOLDER)
+
             # Determine task type
             if analysis_type == 'regression':
                 assembler = VectorAssembler(inputCols=selected_features, outputCol="features")
@@ -314,27 +307,38 @@ def analyze_data(file_id):
                 model = pipeline.fit(df)
             else:
                 model = None  # For clustering, handled elsewhere
+
             if model:
                 model_path = os.path.join(MODELS_FOLDER, f"{analysis_type}_{file_id}_{'_'.join(selected_features)}_{target_feature}")
                 model.save(model_path)
                 trained_models[model_key] = model_path
+                # Store the feature columns used for training in metadata
+                if 'trained_feature_cols' not in metadata:
+                    metadata['trained_feature_cols'] = {}
+                metadata['trained_feature_cols'][model_key] = selected_features
                 metadata['trained_models'] = trained_models
                 mongo.update_file_metadata(file_id, metadata)
                 logger.info(f"Trained and saved new {analysis_type} model for selected features/target.")
-                # Inform the user (frontend should display this message)
-                return jsonify({'message': 'Model was not pre-trained for these columns. Training now. Please retry your analysis in a moment.'}), 202
-        # Always load and use the PipelineModel for analysis
-        from pyspark.ml import PipelineModel
-        if not model_path:
-            return jsonify({'message': 'Model is still being trained. Please wait and try again.'}), 202
-        pipeline_model = PipelineModel.load(model_path)
+                just_trained = True
+            else:
+                return jsonify({'message': 'Model training failed.'}), 500
+
+        # Use the trained model directly if just trained, otherwise load from disk
+        if just_trained and model is not None:
+            pipeline_model = model
+        else:
+            from pyspark.ml import PipelineModel
+            if model_path:
+                pipeline_model = PipelineModel.load(model_path)
+            else:
+                return jsonify({'message': 'Model is still being trained. Please wait and try again.'}), 202
+
         predictions = pipeline_model.transform(df)
-        # You can now use 'predictions' for further analysis or metrics
-        # (If analyzer.analyze uses predictions, pass them as needed)
         results = analyzer.analyze(
             analysis_type=analysis_type,
             selected_features=selected_features,
-            target_feature=target_feature
+            target_feature=target_feature,
+            predictions=predictions  # Pass predictions if needed
         )
         logger.info("Analysis completed")
         # Update metadata with results
@@ -346,6 +350,7 @@ def analyze_data(file_id):
         })
         logger.info("Analysis process completed successfully")
         return jsonify(results)
+
     except Exception as e:
         logger.error(f"Error in analysis: {str(e)}")
         logger.error(traceback.format_exc())
@@ -372,12 +377,30 @@ def handle_tasks(file_id):
             # Use the new model_selector module
             suggested_tasks = suggest_tasks(df)
             
+            # --- Suggest only suitable target features ---
+            total_rows = len(df)
+            possible_targets = []
+            for col in df.columns:
+                try:
+                    # Always allow numeric columns as regression targets
+                    if str(df[col].dtype).startswith(('int', 'float')):
+                        possible_targets.append(col)
+                        continue
+                    unique_vals = df[col].nunique(dropna=True)
+                    # For classification: less than 50% unique (categorical)
+                    if unique_vals < 0.5 * total_rows and col not in possible_targets:
+                        possible_targets.append(col)
+                except TypeError:
+                    # Skip columns with unhashable types (like dicts)
+                    continue
+
             return jsonify({
                 'available_features': df.columns.tolist(),
                 'numeric_features': df.select_dtypes(include=[np.number]).columns.tolist(),
                 'categorical_features': df.select_dtypes(include=['object']).columns.tolist(),
                 'suggested_tasks': suggested_tasks,
-                'data_shape': {'rows': len(df), 'columns': len(df.columns)}
+                'data_shape': {'rows': len(df), 'columns': len(df.columns)},
+                'possible_targets': possible_targets
             })
         
         elif request.method == 'POST':
@@ -403,6 +426,23 @@ def handle_tasks(file_id):
             logger.info(f"DataFrame columns from MongoDB: {df.columns}")
             logger.info("DataFrame schema from MongoDB:")
             df.printSchema()
+            
+            # Check that all selected columns exist in the DataFrame
+            required_cols = feature_cols + ([target_col] if target_col else [])
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                return jsonify({'error': f"Selected columns not found in data: {missing_cols}"}), 400
+            
+            # --- Check if target is suitable for modeling ---
+            if target_col:
+                total_rows = df.count()
+                unique_targets = df.select(target_col).distinct().count()
+                # For regression: warn if target is almost unique
+                if task_type == 'regression' and unique_targets / total_rows > 0.9:
+                    return jsonify({'error': 'Choose a more appropriate target and features, and your model should train successfully.'}), 400
+                # For classification: warn if too many classes
+                if task_type == 'classification' and unique_targets > 0.5 * total_rows:
+                    return jsonify({'error': 'Choose a more appropriate target and features, and your model should train successfully.'}), 400
             
             # Convert to pandas for feature selection
             df_pandas = df.select(feature_cols + [target_col]).toPandas()
@@ -463,45 +503,95 @@ def handle_tasks(file_id):
             
             # Perform task
             results = {}
+            # --- Detect categorical and numeric features ---
+            # Get Spark dtypes as a dict
+            spark_dtypes = dict(df.dtypes)
+            categorical_cols = [col for col in feature_cols if spark_dtypes[col] == 'string']
+            numeric_cols = [col for col in feature_cols if spark_dtypes[col] != 'string']
+            # Prepare indexers for categorical features
+            from pyspark.ml.feature import StringIndexer
+            indexers = [
+                StringIndexer(inputCol=col, outputCol=f"{col}_indexed", handleInvalid="keep")
+                for col in categorical_cols
+            ]
+            assembler_inputs = [f"{col}_indexed" for col in categorical_cols] + numeric_cols
+            # --- Regression ---
             if task_type == 'regression':
-                model_results = model_trainer.train_regressor(df, feature_cols, target_col, algorithm)
-                results['model_performance'] = {'rmse': model_results['rmse']}
-                if model_results['feature_importance']:
-                    results['feature_importance_plot'] = visualizer.create_feature_importance_plot(
-                        model_results['feature_importance']
-                    )
-                
-                # Create regression results plot
-                predictions = model_results['model'].transform(df)
-                results['prediction_plot'] = visualizer.create_regression_results_plot(
-                    predictions.select('label').toPandas(),
-                    predictions.select('prediction').toPandas()
-                )
-            
+                from pyspark.ml import Pipeline
+                from pyspark.ml.feature import VectorAssembler
+                from pyspark.ml.regression import LinearRegression
+                stages = []
+                # Index target if string
+                if spark_dtypes[target_col] == 'string':
+                    label_indexer = StringIndexer(inputCol=target_col, outputCol="label", handleInvalid="keep")
+                    stages.append(label_indexer)
+                    df = label_indexer.fit(df).transform(df)
+                else:
+                    df = df.withColumnRenamed(target_col, "label")
+                stages += indexers
+                assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="features")
+                lr = LinearRegression(featuresCol="features", labelCol="label")
+                stages += [assembler, lr]
+                pipeline = Pipeline(stages=stages)
+                pipeline_model = pipeline.fit(df)
+                predictions = pipeline_model.transform(df)
+                results['model_performance'] = {'rmse': None}  # You can add metrics if needed
+            # --- Classification ---
             elif task_type == 'classification':
-                model_results = model_trainer.train_classifier(df, feature_cols, target_col, algorithm)
-                results['model_performance'] = {'accuracy': model_results['accuracy']}
-                if model_results['feature_importance']:
-                    results['feature_importance_plot'] = visualizer.create_feature_importance_plot(
-                        model_results['feature_importance']
-                    )
-            
+                from pyspark.ml import Pipeline
+                from pyspark.ml.feature import VectorAssembler, StringIndexer
+                from pyspark.ml.classification import LogisticRegression
+                stages = []
+                # Index target if string
+                if spark_dtypes[target_col] == 'string':
+                    label_indexer = StringIndexer(inputCol=target_col, outputCol="label", handleInvalid="keep")
+                    stages.append(label_indexer)
+                    df = label_indexer.fit(df).transform(df)
+                else:
+                    df = df.withColumnRenamed(target_col, "label")
+                stages += indexers
+                assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="features")
+                lr = LogisticRegression(featuresCol="features", labelCol="label")
+                stages += [assembler, lr]
+                pipeline = Pipeline(stages=stages)
+                pipeline_model = pipeline.fit(df)
+                model_path = os.path.join(app.root_path, 'auto_models', f"classification_{file_id}_{'_'.join(feature_cols)}_{target_col}")
+                pipeline_model.save(model_path)
+                if 'trained_feature_cols' not in metadata:
+                    metadata['trained_feature_cols'] = {}
+                model_key = f"classification_{'_'.join(feature_cols)}_{target_col}"
+                metadata['trained_feature_cols'][model_key] = feature_cols
+                if 'trained_models' not in metadata:
+                    metadata['trained_models'] = {}
+                metadata['trained_models'][model_key] = model_path
+                mongo.update_file_metadata(file_id, metadata)
+                predictions = pipeline_model.transform(df)
+                results['model_performance'] = {'accuracy': None}  # You can add metrics if needed
+            # --- Clustering ---
             elif task_type == 'clustering':
+                from pyspark.ml import Pipeline
+                from pyspark.ml.feature import VectorAssembler
+                from pyspark.ml.clustering import KMeans
                 n_clusters = task_params.get('n_clusters', 3)
-                logger.info(f"Feature_cols for clustering from request: {feature_cols}")
-                model_results = model_trainer.train_clustering(df, feature_cols, n_clusters)
-                results['cluster_sizes'] = model_results['cluster_sizes']
-                
-                # Create clustering visualization if 2-3 features
-                if 2 <= len(feature_cols) <= 3:
-                    predictions = model_results['model'].transform(df)
-                    results['clustering_plot'] = visualizer.create_clustering_plot(
-                        predictions.toPandas(),
-                        feature_cols,
-                        predictions.select('cluster').toPandas(),
-                        model_results['cluster_centers']
-                    )
-            
+                stages = indexers
+                assembler = VectorAssembler(inputCols=assembler_inputs, outputCol="features")
+                kmeans = KMeans(featuresCol="features", k=n_clusters, seed=42)
+                stages += [assembler, kmeans]
+                pipeline = Pipeline(stages=stages)
+                pipeline_model = pipeline.fit(df)
+                model_path = os.path.join(app.root_path, 'auto_models', f"clustering_{file_id}_{'_'.join(feature_cols)}")
+                pipeline_model.save(model_path)
+                if 'trained_feature_cols' not in metadata:
+                    metadata['trained_feature_cols'] = {}
+                model_key = f"clustering_{'_'.join(feature_cols)}"
+                metadata['trained_feature_cols'][model_key] = feature_cols
+                if 'trained_models' not in metadata:
+                    metadata['trained_models'] = {}
+                metadata['trained_models'][model_key] = model_path
+                mongo.update_file_metadata(file_id, metadata)
+                predictions = pipeline_model.transform(df)
+                results['cluster_sizes'] = None  # You can add cluster info if needed
+            # --- Correlation Analysis ---
             elif task_type == 'correlation_analysis':
                 df_pandas = df.select(feature_cols).toPandas()
                 results['correlation_plot'] = visualizer.create_correlation_matrix(
@@ -684,11 +774,29 @@ def open_browser():
     except Exception as e:
         logger.error(f"Failed to open browser: {str(e)}")
 
+# --- Health check endpoint for monitoring ---
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'ok'}), 200
+
+# --- Flask error handlers for graceful error responses ---
+@app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal server error: {error}")
+    return jsonify({'error': 'Internal server error'}), 500
+
+@app.errorhandler(404)
+def not_found_error(error):
+    logger.warning(f"Not found: {error}")
+    return jsonify({'error': 'Not found'}), 404
+
 if __name__ == '__main__':
     try:
         Timer(2, open_browser).start()  # Increased delay to 2 seconds
         logger.info("Starting Flask application on port 8080...")
-        app.run(host='127.0.0.1', port=8080, debug=True)
+        import os
+        debug_mode = os.environ.get('FLASK_DEBUG', '0') == '1'
+        app.run(host='0.0.0.0', port=8080, debug=debug_mode)
     except Exception as e:
         logger.error(f"Failed to start Flask application: {str(e)}")
         logger.error(traceback.format_exc()) 

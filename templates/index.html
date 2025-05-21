@@ -135,6 +135,7 @@
 
         <!-- Results Section -->
         <div id="results" class="results-container"></div>
+        <button id="checkAnalysisBtn" class="btn btn-secondary mt-2" style="display:none;">Check Analysis Status</button>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
@@ -142,6 +143,22 @@
     <script>
         let currentFileId = null;
         let currentColumns = [];
+        let possibleTargets = [];
+
+        // Fetch possible targets after upload and update selectors
+        async function fetchPossibleTargetsAndPopulateSelectors() {
+            if (!currentFileId) return;
+            try {
+                const response = await fetch(`/tasks/${currentFileId}`);
+                if (!response.ok) throw new Error('Failed to fetch task info');
+                const data = await response.json();
+                currentColumns = data.available_features;
+                possibleTargets = data.possible_targets || [];
+                populateFeatureSelectors(currentColumns, possibleTargets);
+            } catch (err) {
+                console.error('Error fetching possible targets:', err);
+            }
+        }
 
         document.getElementById('uploadForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -177,7 +194,8 @@
                 }
 
                 currentFileId = uploadData.file_id;
-                currentColumns = uploadData.columns;
+                // Fetch possible targets and populate selectors
+                await fetchPossibleTargetsAndPopulateSelectors();
 
                 // Perform initial exploratory analysis
                 const analysisResponse = await fetch(`/analyze/${currentFileId}`, {
@@ -201,7 +219,7 @@
 
                 // Show additional analysis section and populate feature selectors
                 analysisSection.style.display = 'block';
-                populateFeatureSelectors(currentColumns);
+                document.getElementById('checkAnalysisBtn').style.display = 'inline-block';
 
             } catch (err) {
                 console.error('Error:', err); // Debug log
@@ -231,40 +249,51 @@
         });
 
         // Populate feature selectors
-        function populateFeatureSelectors(columns) {
+        function populateFeatureSelectors(columns, targets) {
             console.log('Populating features with:', columns); // Debug log
-            
-            if (!columns || !Array.isArray(columns)) {
-                console.error('Invalid columns data:', columns);
-                return;
-            }
-
             const featuresSelect = document.getElementById('features');
             const targetFeatureSelect = document.getElementById('targetFeature');
-            
-            if (!featuresSelect || !targetFeatureSelect) {
+            const targetFeatureContainer = document.getElementById('targetFeatureContainer');
+            if (!featuresSelect || !targetFeatureSelect || !targetFeatureContainer) {
                 console.error('Feature select elements not found');
                 return;
             }
-            
             // Clear existing options
             featuresSelect.innerHTML = '';
             targetFeatureSelect.innerHTML = '';
-            
-            // Add options to both selects
+            // Add options to features
             columns.forEach(column => {
                 if (typeof column === 'string') {
                     const featureOption = new Option(column, column);
-                    const targetOption = new Option(column, column);
                     featuresSelect.add(featureOption);
-                    targetFeatureSelect.add(targetOption);
                 }
             });
-
-            // Set initial state for multiple selection
+            // Add only possible targets
+            if (targets && targets.length > 0) {
+                targetFeatureSelect.style.display = '';
+                // Remove any previous message
+                let msg = document.getElementById('noTargetsMsg');
+                if (msg) msg.remove();
+                targets.forEach(column => {
+                    if (typeof column === 'string') {
+                        const targetOption = new Option(column, column);
+                        targetFeatureSelect.add(targetOption);
+                    }
+                });
+            } else {
+                // Hide the dropdown and show a message
+                targetFeatureSelect.style.display = 'none';
+                // Remove any previous message
+                let msg = document.getElementById('noTargetsMsg');
+                if (msg) msg.remove();
+                msg = document.createElement('div');
+                msg.id = 'noTargetsMsg';
+                msg.className = 'alert alert-warning mt-2';
+                msg.textContent = 'No valid target features are available for modeling with the current data. Please check your data or feature selection.';
+                targetFeatureContainer.appendChild(msg);
+            }
             featuresSelect.multiple = true;
-            
-            console.log('Features populated successfully'); // Debug log
+            console.log('Features and targets populated successfully'); // Debug log
         }
 
         // Handle additional analysis
@@ -279,8 +308,9 @@
                 return;
             }
 
-            if (analysisType !== 'clustering' && !targetFeature) {
-                alert('Please select a target feature');
+            // Prevent analysis if no valid target
+            if (analysisType !== 'clustering' && (!targetFeature || possibleTargets.length === 0)) {
+                alert('No valid target features are available for modeling.');
                 return;
             }
 
@@ -319,39 +349,10 @@
             }
         });
 
-        function showTrainingMessage(fileId) {
-            const results = document.getElementById('results');
-            results.innerHTML = `<div class="alert alert-info" id="training-message">Model is still being trained. Please wait and try again.<br>
-                <div class="progress mt-2">
-                    <div id="training-progress-bar" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
-                </div>
-            </div>`;
-            pollTrainingProgress(fileId);
-        }
-
-        function pollTrainingProgress(fileId) {
-            fetch(`/model_status/${fileId}`)
-                .then(res => res.json())
-                .then(data => {
-                    const bar = document.getElementById('training-progress-bar');
-                    if (bar) {
-                        bar.style.width = data.progress + '%';
-                        bar.textContent = data.progress + '%';
-                    }
-                    if (data.progress < 100) {
-                        setTimeout(() => pollTrainingProgress(fileId), 2000);
-                    } else {
-                        // Automatically retry analysis when done
-                        fetchAnalysisResults();
-                    }
-                });
-        }
-
         function displayResults(data) {
             const results = document.getElementById('results');
-            // Handle backend message (e.g., model is being trained)
-            if (data.message) {
-                showTrainingMessage(currentFileId);
+            if (!data.dataset_info) {
+                results.innerHTML = `<div class="alert alert-info">${data.message || "Analysis is not ready yet. Please try again in a moment."}</div>`;
                 return;
             }
             // Display dataset info
@@ -396,13 +397,13 @@
                     html += `
                         <h3>Statistics</h3>
                         <ul>
-                            <li>Min: ${analysis.stats.min.toFixed(2)}</li>
-                            <li>Max: ${analysis.stats.max.toFixed(2)}</li>
-                            <li>Mean: ${analysis.stats.mean.toFixed(2)}</li>
-                            <li>Std: ${analysis.stats.std.toFixed(2)}</li>
-                            <li>25% Quartile: ${analysis.stats.quartiles['25%'].toFixed(2)}</li>
-                            <li>50% Quartile: ${analysis.stats.quartiles['50%'].toFixed(2)}</li>
-                            <li>75% Quartile: ${analysis.stats.quartiles['75%'].toFixed(2)}</li>
+                            <li>Min: ${analysis.stats.min != null ? analysis.stats.min.toFixed(2) : 'N/A'}</li>
+                            <li>Max: ${analysis.stats.max != null ? analysis.stats.max.toFixed(2) : 'N/A'}</li>
+                            <li>Mean: ${analysis.stats.mean != null ? analysis.stats.mean.toFixed(2) : 'N/A'}</li>
+                            <li>Std: ${analysis.stats.std != null ? analysis.stats.std.toFixed(2) : 'N/A'}</li>
+                            <li>25% Quartile: ${analysis.stats.quartiles['25%'] != null ? analysis.stats.quartiles['25%'].toFixed(2) : 'N/A'}</li>
+                            <li>50% Quartile: ${analysis.stats.quartiles['50%'] != null ? analysis.stats.quartiles['50%'].toFixed(2) : 'N/A'}</li>
+                            <li>75% Quartile: ${analysis.stats.quartiles['75%'] != null ? analysis.stats.quartiles['75%'].toFixed(2) : 'N/A'}</li>
                         </ul>
                     `;
 
@@ -539,6 +540,42 @@
 
             results.innerHTML += html;
         }
+
+        // Add this function to check analysis readiness
+        async function checkAnalysisResults(fileId) {
+            const loading = document.getElementById('loading');
+            const error = document.getElementById('error');
+            const results = document.getElementById('results');
+
+            loading.style.display = 'block';
+            error.style.display = 'none';
+            results.innerHTML = '';
+
+            try {
+                const response = await fetch(`/results/${fileId}`);
+                if (!response.ok) {
+                    throw new Error('Failed to fetch analysis results');
+                }
+                const data = await response.json();
+                if (data.tasks && data.tasks.exploratory && data.tasks.exploratory.results) {
+                    displayResults(data.tasks.exploratory.results);
+                } else {
+                    results.innerText = 'Analysis is not ready yet. Please try again in a moment.';
+                }
+            } catch (err) {
+                error.textContent = `Error: ${err.message}`;
+                error.style.display = 'block';
+            } finally {
+                loading.style.display = 'none';
+            }
+        }
+
+        // Button click handler
+        document.getElementById('checkAnalysisBtn').addEventListener('click', function() {
+            if (currentFileId) {
+                checkAnalysisResults(currentFileId);
+            }
+        });
     </script>
 </body>
 </html> 

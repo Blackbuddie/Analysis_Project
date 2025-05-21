@@ -8,10 +8,16 @@ class Config:
     MONGO_URI = os.getenv('MONGO_URI', 'mongodb://localhost:27017/data_analysis_platform')  # Default Compass connection
     DB_NAME = os.getenv('DB_NAME', 'data_analysis_platform')
     
+    # CORS Configuration
+    ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', 'http://localhost:3000,http://127.0.0.1:3000').split(',')
+    CORS_METHODS = ['GET', 'POST', 'OPTIONS']
+    CORS_HEADERS = ['Content-Type', 'Authorization']
+    CORS_SUPPORTS_CREDENTIALS = True
+    
     # File Upload Configuration
     UPLOAD_FOLDER = os.path.join(os.getcwd(), 'uploads')
     ALLOWED_EXTENSIONS = {'csv', 'txt', 'json', 'parquet'}
-    MAX_CONTENT_LENGTH = 1024 * 1024 * 1024  # 1GB max file size
+    MAX_CONTENT_LENGTH = 2 * 1024 * 1024 * 1024  # 2GB max file size
     
     # Spark Configuration
     SPARK_MASTER = os.getenv('SPARK_MASTER', 'local[*]')

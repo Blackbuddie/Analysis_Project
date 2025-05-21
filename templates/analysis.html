@@ -89,39 +89,10 @@
             }
         }
 
-        function showTrainingMessage(fileId) {
-            const results = document.getElementById('results');
-            results.innerHTML = `<div class=\"alert alert-info\" id=\"training-message\">Model is still being trained. Please wait and try again.<br>
-                <div class=\"progress mt-2\">
-                    <div id=\"training-progress-bar\" class=\"progress-bar\" role=\"progressbar\" style=\"width: 0%\">0%</div>
-                </div>
-            </div>`;
-            pollTrainingProgress(fileId);
-        }
-
-        function pollTrainingProgress(fileId) {
-            fetch(`/model_status/${fileId}`)
-                .then(res => res.json())
-                .then(data => {
-                    const bar = document.getElementById('training-progress-bar');
-                    if (bar) {
-                        bar.style.width = data.progress + '%';
-                        bar.textContent = data.progress + '%';
-                    }
-                    if (data.progress < 100) {
-                        setTimeout(() => pollTrainingProgress(fileId), 2000);
-                    } else {
-                        // Automatically retry analysis when done
-                        fetchAnalysisResults();
-                    }
-                });
-        }
-
         function displayResults(data) {
             const results = document.getElementById('results');
-            // Handle backend message (e.g., model is being trained)
-            if (data.message) {
-                showTrainingMessage(fileId);
+            if (!data.dataset_info) {
+                results.innerHTML = `<div class="alert alert-info">${data.message || "Analysis is not ready yet. Please try again in a moment."}</div>`;
                 return;
             }
             // Display dataset info
@@ -166,13 +137,13 @@
                     html += `
                         <h3>Statistics</h3>
                         <ul>
-                            <li>Min: ${analysis.stats.min.toFixed(2)}</li>
-                            <li>Max: ${analysis.stats.max.toFixed(2)}</li>
-                            <li>Mean: ${analysis.stats.mean.toFixed(2)}</li>
-                            <li>Std: ${analysis.stats.std.toFixed(2)}</li>
-                            <li>25% Quartile: ${analysis.stats.quartiles['25%'].toFixed(2)}</li>
-                            <li>50% Quartile: ${analysis.stats.quartiles['50%'].toFixed(2)}</li>
-                            <li>75% Quartile: ${analysis.stats.quartiles['75%'].toFixed(2)}</li>
+                            <li>Min: ${analysis.stats.min != null ? analysis.stats.min.toFixed(2) : 'N/A'}</li>
+                            <li>Max: ${analysis.stats.max != null ? analysis.stats.max.toFixed(2) : 'N/A'}</li>
+                            <li>Mean: ${analysis.stats.mean != null ? analysis.stats.mean.toFixed(2) : 'N/A'}</li>
+                            <li>Std: ${analysis.stats.std != null ? analysis.stats.std.toFixed(2) : 'N/A'}</li>
+                            <li>25% Quartile: ${analysis.stats.quartiles['25%'] != null ? analysis.stats.quartiles['25%'].toFixed(2) : 'N/A'}</li>
+                            <li>50% Quartile: ${analysis.stats.quartiles['50%'] != null ? analysis.stats.quartiles['50%'].toFixed(2) : 'N/A'}</li>
+                            <li>75% Quartile: ${analysis.stats.quartiles['75%'] != null ? analysis.stats.quartiles['75%'].toFixed(2) : 'N/A'}</li>
                         </ul>
                     `;
 

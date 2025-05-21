@@ -20,8 +20,10 @@ class SparkManager:
         self.spark = SparkSession.builder \
             .appName(Config.SPARK_APP_NAME) \
             .master(Config.SPARK_MASTER) \
-            .config('spark.driver.memory', '2g') \
-            .config('spark.executor.memory', '2g') \
+            .config('spark.driver.memory', '8g') \
+            .config('spark.executor.memory', '8g') \
+            .config('spark.memory.fraction', '0.8') \
+            .config('spark.memory.storageFraction', '0.5') \
             .config('spark.driver.maxResultSize', '1g') \
             .config('spark.python.worker.memory', '1g') \
             .config('spark.jars.packages', 'org.mongodb.spark:mongo-spark-connector_2.12:3.0.1') \
